@@ -12,7 +12,7 @@ class VideoGenerator:
         Generate a video with the AI anchor reading the provided text.
         
         Args:
-            input_text: The script for the AI anchor to read
+            input_text: The script for the AI anchor to read (can include SSML)
             source_url: URL of the anchor image
             voice_id: Optional voice ID to override the default
         
@@ -23,18 +23,49 @@ class VideoGenerator:
         
         # Use provided voice_id or default
         voice_to_use = voice_id if voice_id else self.voice_id
-
-        payload = {
-            "script": {
+        
+        # Detect if input contains SSML markup
+        use_ssml = '<mstts:express-as' in input_text or '<speak' in input_text
+        
+        # Prepare the script payload based on whether SSML is used
+        if use_ssml:
+            # For SSML, we need to wrap it properly
+            if not input_text.strip().startswith('<speak'):
+                # Wrap with proper SSML speak tags
+                ssml_script = f'''<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" 
+                                  xmlns:mstts="https://www.w3.org/2001/mstts" xml:lang="en-US">
+                                  <voice name="{voice_to_use}">
+                                      {input_text}
+                                  </voice>
+                              </speak>'''
+            else:
+                ssml_script = input_text
+                
+            script_payload = {
                 "type": "text",
                 "subtitles": "false",
                 "provider": {
                     "type": "microsoft",
                     "voice_id": voice_to_use
                 },
+                "ssml": "true",
+                "input": ssml_script
+            }
+        else:
+            # Regular text-to-speech without SSML
+            script_payload = {
+                "type": "text",
+                "subtitles": "false", 
+                "provider": {
+                    "type": "microsoft",
+                    "voice_id": voice_to_use
+                },
                 "ssml": "false",
                 "input": input_text
-            },
+            }
+
+        payload = {
+            "script": script_payload,
             "config": {
                 "fluent": "false",
                 "pad_audio": "0.0"
@@ -63,6 +94,7 @@ class VideoGenerator:
             print("Initiating video generation...")
             print(f"API Endpoint: {url}")
             print(f"Using voice: {voice_to_use}")
+            print(f"SSML enabled: {use_ssml}")
             print(f"Text length: {len(input_text)} characters")
             
             response = requests.post(url, json=payload, headers=headers)
@@ -130,3 +162,45 @@ class VideoGenerator:
         except Exception as e:
             print(f"Unexpected error: {e}")
             return None
+
+    def get_supported_voices(self):
+        """
+        Get list of supported voices from D-ID API
+        """
+        try:
+            url = "https://api.d-id.com/tts/voices"
+            
+            if ':' in self.api_key:
+                auth_header = f"Basic {self.api_key}"
+            else:
+                auth_header = f"Bearer {self.api_key}"
+                
+            headers = {
+                "accept": "application/json",
+                "authorization": auth_header
+            }
+            
+            response = requests.get(url, headers=headers)
+            response.raise_for_status()
+            
+            return response.json()
+            
+        except Exception as e:
+            print(f"Error getting supported voices: {e}")
+            return None
+            
+    def test_voice(self, voice_id, test_text="Hello, this is a test.", style=None):
+        """
+        Test a specific voice with sample text
+        """
+        print(f"Testing voice: {voice_id}")
+        
+        if style:
+            test_script = f'<mstts:express-as style="{style}">{test_text}</mstts:express-as>'
+        else:
+            test_script = test_text
+            
+        # Use a test image
+        test_image = "https://i.ibb.co/hYcxXTW/anchor.png"
+        
+        return self.generate_video(test_script, test_image, voice_id)
