@@ -6,15 +6,27 @@ class VideoGenerator:
     def __init__(self, api_key):
         self.api_key = api_key
         self.voice_id = "en-US-JennyNeural"  # Default voice
+        
+        # D-ID Presenter IDs (use these instead of URLs for D-ID avatars)
+        self.presenters = {
+            "amy-Aq6OmGZnMt": "Amy",
+            "anna-R5OMsEJ3DK": "Anna", 
+            "bella-lux-VbmPiYLq5M": "Bella",
+            "fatha-rK5XHPPvRT": "Fatha",  # This is the Fatha presenter ID
+            "josh-WNqtJIgqUp": "Josh",
+            "matt-zcSXHQnCml": "Matt",
+            "noelle-8Iy3QSlXV7": "Noelle"
+        }
 
-    def generate_video(self, input_text, source_url, voice_id=None):
+    def generate_video(self, input_text, source_url=None, voice_id=None, presenter_id=None):
         """
         Generate a video with the AI anchor reading the provided text.
         
         Args:
             input_text: The script for the AI anchor to read (can include SSML)
-            source_url: URL of the anchor image
+            source_url: URL of custom anchor image (use this OR presenter_id, not both)
             voice_id: Optional voice ID to override the default
+            presenter_id: D-ID presenter ID for built-in avatars
         
         Returns:
             URL of the generated video or None if failed
@@ -27,11 +39,9 @@ class VideoGenerator:
         # Detect if input contains SSML markup
         use_ssml = '<mstts:express-as' in input_text or '<speak' in input_text
         
-        # Prepare the script payload based on whether SSML is used
+        # Prepare the script payload
         if use_ssml:
-            # For SSML, we need to wrap it properly
             if not input_text.strip().startswith('<speak'):
-                # Wrap with proper SSML speak tags
                 ssml_script = f'''<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" 
                                   xmlns:mstts="https://www.w3.org/2001/mstts" xml:lang="en-US">
                                   <voice name="{voice_to_use}">
@@ -52,7 +62,6 @@ class VideoGenerator:
                 "input": ssml_script
             }
         else:
-            # Regular text-to-speech without SSML
             script_payload = {
                 "type": "text",
                 "subtitles": "false", 
@@ -64,18 +73,34 @@ class VideoGenerator:
                 "input": input_text
             }
 
-        payload = {
-            "script": script_payload,
-            "config": {
-                "fluent": "false",
-                "pad_audio": "0.0"
-            },
-            "source_url": source_url
-        }
+        # Build payload based on whether using presenter or custom image
+        if presenter_id and presenter_id in self.presenters:
+            # Using D-ID presenter
+            payload = {
+                "script": script_payload,
+                "presenter_id": presenter_id,
+                "config": {
+                    "fluent": "false",
+                    "pad_audio": "0.0"
+                }
+            }
+            print(f"Using D-ID Presenter: {self.presenters[presenter_id]} (ID: {presenter_id})")
+        elif source_url:
+            # Using custom image URL
+            payload = {
+                "script": script_payload,
+                "source_url": source_url,
+                "config": {
+                    "fluent": "false",
+                    "pad_audio": "0.0"
+                }
+            }
+            print(f"Using custom image: {source_url}")
+        else:
+            print("Error: Must provide either source_url or presenter_id")
+            return None
 
-        # Determine auth format based on API key structure
-        # New D-ID keys use "email:token" format with Basic auth
-        # Old keys use JWT format with Bearer auth
+        # Determine auth format
         if ':' in self.api_key:
             auth_header = f"Basic {self.api_key}"
             print("Using Basic authentication")
@@ -100,10 +125,13 @@ class VideoGenerator:
             response = requests.post(url, json=payload, headers=headers)
             print(f"Response Status Code: {response.status_code}")
             
-            if response.status_code != 201 and response.status_code != 200:
+            if response.status_code not in [201, 200]:
                 print(f"Error Response: {response.text}")
+                if "presenter_id" in response.text and "not found" in response.text:
+                    print("\n⚠️  Presenter not found. Your account may not have access to this presenter.")
+                    print("   Try using a custom image URL instead.")
                 
-            response.raise_for_status()  # Raise an exception for bad status codes
+            response.raise_for_status()
             _response = response.json()
             print("Initial Response: ", _response)
 
@@ -114,14 +142,13 @@ class VideoGenerator:
             talk_id = _response['id']
             talk_url = f"{url}/{talk_id}"
             
-            # Use same auth format for polling
             headers_polling = {
                 "accept": "application/json",
                 "authorization": auth_header
             }
 
             # Poll for video completion
-            max_attempts = 30  # Maximum polling attempts
+            max_attempts = 30
             attempt = 0
             
             while attempt < max_attempts:
@@ -148,7 +175,7 @@ class VideoGenerator:
                     return None
                 
                 attempt += 1
-                time.sleep(10)  # Wait 10 seconds before next poll
+                time.sleep(10)
 
             print("Video generation timed out")
             return None
@@ -163,44 +190,37 @@ class VideoGenerator:
             print(f"Unexpected error: {e}")
             return None
 
-    def get_supported_voices(self):
-        """
-        Get list of supported voices from D-ID API
-        """
-        try:
-            url = "https://api.d-id.com/tts/voices"
-            
-            if ':' in self.api_key:
-                auth_header = f"Basic {self.api_key}"
-            else:
-                auth_header = f"Bearer {self.api_key}"
-                
-            headers = {
-                "accept": "application/json",
-                "authorization": auth_header
-            }
-            
-            response = requests.get(url, headers=headers)
-            response.raise_for_status()
-            
-            return response.json()
-            
-        except Exception as e:
-            print(f"Error getting supported voices: {e}")
-            return None
-            
-    def test_voice(self, voice_id, test_text="Hello, this is a test.", style=None):
-        """
-        Test a specific voice with sample text
-        """
-        print(f"Testing voice: {voice_id}")
+    def list_available_presenters(self):
+        """List all available D-ID presenters for your account"""
         
-        if style:
-            test_script = f'<mstts:express-as style="{style}">{test_text}</mstts:express-as>'
+        url = "https://api.d-id.com/presenters"
+        
+        if ':' in self.api_key:
+            auth_header = f"Basic {self.api_key}"
         else:
-            test_script = test_text
+            auth_header = f"Bearer {self.api_key}"
             
-        # Use a test image
-        test_image = "https://i.ibb.co/hYcxXTW/anchor.png"
+        headers = {
+            "accept": "application/json",
+            "authorization": auth_header
+        }
         
-        return self.generate_video(test_script, test_image, voice_id)
+        try:
+            response = requests.get(url, headers=headers)
+            if response.status_code == 200:
+                presenters = response.json()
+                print("\nAvailable D-ID Presenters:")
+                print("-" * 40)
+                for p in presenters.get('presenters', []):
+                    print(f"ID: {p.get('id')}")
+                    print(f"Name: {p.get('name', 'N/A')}")
+                    print(f"Gender: {p.get('gender', 'N/A')}")
+                    print("-" * 40)
+                return presenters
+            else:
+                print(f"Failed to get presenters: {response.status_code}")
+                print(response.text)
+                return None
+        except Exception as e:
+            print(f"Error listing presenters: {e}")
+            return None
